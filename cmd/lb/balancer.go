@@ -1,9 +1,5 @@
 package main
 
-// TODO:
-// just put in separate function balancer
-// and test it
-
 import (
 	"context"
 	"crypto/sha512"
@@ -151,6 +147,8 @@ func main() {
 	}
 
 	frontend := httptools.CreateServer(*port, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		log.Println("remoterAddr:", r.RemoteAddr)
+
 		server := GetAvailableServer(r.RemoteAddr)
 
 		if server != "" {
