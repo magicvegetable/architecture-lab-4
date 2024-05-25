@@ -1,28 +1,38 @@
 package main
 
+// TODO:
+// just put in separate function balancer
+// and test it
+
 import (
 	"context"
+	"crypto/sha512"
 	"flag"
 	"fmt"
+	"hash/crc64"
 	"io"
 	"log"
 	"net/http"
+	"slices"
+	"sync"
 	"time"
 
-	"github.com/roman-mazur/architecture-practice-4-template/httptools"
-	"github.com/roman-mazur/architecture-practice-4-template/signal"
+	"github.com/magicvegetable/architecture-lab-4/httptools"
+	"github.com/magicvegetable/architecture-lab-4/signal"
 )
 
 var (
-	port = flag.Int("port", 8090, "load balancer port")
+	port       = flag.Int("port", 8090, "load balancer port")
 	timeoutSec = flag.Int("timeout-sec", 3, "request timeout time in seconds")
-	https = flag.Bool("https", false, "whether backends support HTTPs")
+	https      = flag.Bool("https", false, "whether backends support HTTPs")
 
 	traceEnabled = flag.Bool("trace", false, "whether to include tracing information into responses")
+
+	serversM = sync.Mutex{}
 )
 
 var (
-	timeout = time.Duration(*timeoutSec) * time.Second
+	timeout     = time.Duration(*timeoutSec) * time.Second
 	serversPool = []string{
 		"server1:8080",
 		"server2:8080",
@@ -84,22 +94,68 @@ func forward(dst string, rw http.ResponseWriter, r *http.Request) error {
 	}
 }
 
+var poly = uint64(time.Now().Unix())
+
+// In reality is checksum of hash + polt
+func hash(str string) uint64 {
+	hasher := sha512.New()
+	hasher.Write([]byte(str))
+
+	table := crc64.MakeTable(poly)
+
+	return crc64.Checksum(hasher.Sum(nil), table)
+}
+
+func GetAvailableServer(addr string) string {
+	if len(serversPool) == 0 {
+		return ""
+	}
+
+	serverIndex := hash(addr)
+
+	serversM.Lock() // should?
+
+	serverIndex %= uint64(len(serversPool))
+
+	serversM.Unlock()
+
+	return serversPool[serverIndex]
+}
+
 func main() {
 	flag.Parse()
 
-	// TODO: Використовуйте дані про стан сервреа, щоб підтримувати список тих серверів, яким можна відправляти ззапит.
+	log.Println("Balancer started")
+
 	for _, server := range serversPool {
 		server := server
 		go func() {
-			for range time.Tick(10 * time.Second) {
-				log.Println(server, health(server))
+			for range time.Tick(1 * time.Second) {
+				alive := health(server)
+
+				if !alive {
+					serversM.Lock()
+					serverI := slices.Index(serversPool, server)
+
+					newServersPool := serversPool[:serverI]
+					newServersPool = append(newServersPool, serversPool[serverI+1:]...)
+
+					serversPool = newServersPool
+
+					serversM.Unlock()
+
+					break
+				}
 			}
 		}()
 	}
 
 	frontend := httptools.CreateServer(*port, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		// TODO: Рееалізуйте свій алгоритм балансувальника.
-		forward(serversPool[0], rw, r)
+		server := GetAvailableServer(r.RemoteAddr)
+
+		if server != "" {
+			forward(server, rw, r)
+		}
 	}))
 
 	log.Println("Starting load balancer...")
