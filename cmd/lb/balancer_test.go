@@ -1,23 +1,24 @@
 package main
 
-import . "github.com/magicvegetable/architecture-lab-4/err"
-import . "github.com/magicvegetable/architecture-lab-4/integration"
 import (
-	"testing"
 	"fmt"
 	"math/rand"
-	"time"
 	"slices"
+	"testing"
+	"time"
+
+	. "github.com/magicvegetable/architecture-lab-4/integration"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
-	maxIPPartValue = uint64(255)
-	maxPort = uint64(65535)
-	GetAvailableServerTestsAmount = 100
+	maxIPPartValue                      = uint64(255)
+	maxPort                             = uint64(65535)
+	GetAvailableServerTestsAmount       = 100
 	GetAvailableServerTestsChecksAmount = 100
 
-	maxRandStrSize = uint64(100)
-	HashTestsAmount = 100
+	maxRandStrSize        = uint64(100)
+	HashTestsAmount       = 100
 	HashTestsChecksAmount = 100
 )
 
@@ -40,11 +41,7 @@ func TestHash(t *testing.T) {
 		for i := 0; i < HashTestsChecksAmount; i++ {
 			h2 := hash(str)
 
-			if h1 != h2 {
-				err := fmt.Errorf("Expected: %v\nGot: %v", h1, h2)
-				err = FormatError(err, "Wrong hash")
-				t.Error(err)
-			}
+			assert.Equal(t, h1, h2, "same hash for the same string")
 		}
 	}
 }
@@ -54,22 +51,15 @@ func TestGetAvailableServer(t *testing.T) {
 		ipNet := RandIPNet()
 		ip, err := RandIP(ipNet)
 
-		if err != nil {
-			err = FormatError(err, "RandIP(%#v)", ipNet)
-			panic(err)
-		}
+		assert.Nil(t, err, "no error for valid IPNet")
 
-		addr := ip.String() + fmt.Sprintf("%v", rand.Uint64() % (maxPort + 1))
+		addr := ip.String() + fmt.Sprintf("%v", rand.Uint64()%(maxPort+1))
 
 		s1 := GetAvailableServer(addr)
 		for i := 0; i < GetAvailableServerTestsChecksAmount; i++ {
 			s2 := GetAvailableServer(addr)
 
-			if s1 != s2 {
-				err := fmt.Errorf("Expected: %v\nGot: %v", s1, s2)
-				err = FormatError(err, "Wrong server")
-				t.Error(err)
-			}
+			assert.Equal(t, s1, s2, "same server for the same address")
 		}
 	}
 }
@@ -84,7 +74,7 @@ func killServer(server string) {
 	}
 
 	newServersPool := aliveServers[:serverI]
-	newServersPool = append(newServersPool, aliveServers[serverI + 1:]...)
+	newServersPool = append(newServersPool, aliveServers[serverI+1:]...)
 
 	aliveServers = newServersPool
 }
@@ -108,29 +98,32 @@ func TestBalancer(t *testing.T) {
 	CheckServerHealthInterval = 1 * time.Millisecond
 
 	MonitorServers(HealthMock)
-	
+
 	for _, server := range allServers {
-		t.Run("kill " + server, func(t *testing.T) {
+		t.Run("kill "+server, func(t *testing.T) {
 			killServer(server)
 			time.Sleep(TestServersPoolStateInterval)
 
-			if slices.Contains(ServersPool, server) {
-				err := FormatError(nil, "Dead server (%v) in ServersPool (%v)", server, ServersPool)
-				t.Error(err)
-			}
+			assert.NotContains(
+				t,
+				ServersPool,
+				server,
+				"No dead server in the ServersPool",
+			)
 		})
 	}
 
 	for _, server := range allServers {
-		t.Run("resurrect " + server, func(t *testing.T) {
+		t.Run("resurrect "+server, func(t *testing.T) {
 			resurrectServer(server)
 			time.Sleep(TestServersPoolStateInterval)
 
-			if !slices.Contains(ServersPool, server) {
-				err := FormatError(nil, "No Alive server (%v) in ServersPool (%v)", server, ServersPool)
-				t.Error(err)
-			}
+			assert.Contains(
+				t,
+				ServersPool,
+				server,
+				"Alive server in the ServersPool",
+			)
 		})
 	}
 }
-

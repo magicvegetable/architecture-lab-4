@@ -1,33 +1,36 @@
 package integration
 
-import . "github.com/magicvegetable/architecture-lab-4/err"
 import (
+	"bufio"
+	"bytes"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
-	"bytes"
-	"io"
-	"bufio"
-	"net"
-	"sync"
-	"log"
-	"strings"
+
+	. "github.com/magicvegetable/architecture-lab-4/err"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
-	ReadDeadline = 10 * time.Millisecond
-	HttpBalancerTestsAmount = 3
+	ReadDeadline                    = 10 * time.Millisecond
+	HttpBalancerTestsAmount         = 3
 	HttpBalancerChecksPerTestAmount = 3
-	CopyBufferSize = 128
-	AmountOfChangeIP = 3
-	randomCIDRTestAmount = 10
-	MaxAttemptsToConnect = 200
+	CopyBufferSize                  = 128
+	AmountOfChangeIP                = 3
+	randomCIDRTestAmount            = 10
+	MaxAttemptsToConnect            = 200
+	connWaitTime                    = time.Second
+	MaxAttemptsToGetInterface       = 20
 )
 
-var	BaseAddress = "http://balancer:8090"
+var BaseAddress = "http://balancer:8090"
 
 func Copy(out io.Writer, connection net.Conn) error {
 	size := CopyBufferSize
@@ -48,7 +51,7 @@ func Copy(out io.Writer, connection net.Conn) error {
 				)
 			}
 
-			break;
+			break
 		}
 
 		_, err = out.Write(buffer)
@@ -141,6 +144,22 @@ func GetLbfrom(url *url.URL, connection net.Conn) (string, error) {
 	return resp.Header.Get("Lb-from"), nil
 }
 
+func Connect(network string, url *url.URL) (conn net.Conn, err error) {
+	for i := 0; i < MaxAttemptsToConnect; i++ {
+		fmt.Println("trying connect...")
+		conn, err = net.DialTimeout(network, url.Host, connWaitTime)
+
+		if err != nil {
+			continue
+		}
+
+		fmt.Println("connected!")
+		return
+	}
+
+	return
+}
+
 func balancerHttpGetTest(t *testing.T) {
 	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
 		t.Skip("Integration test is not enabled")
@@ -162,19 +181,11 @@ func balancerHttpGetTest(t *testing.T) {
 	for i := 0; i < HttpBalancerTestsAmount; i++ {
 		go func() {
 			network := "tcp"
-			log.Println("gonna connect...")
-			connection, err := net.DialTimeout(network, url.Host, time.Second)
+			connection, err := Connect(network, url)
 
-			attempts := 0
-			for err != nil {
-				log.Println("trying connect...")
-				connection, err = net.DialTimeout(network, url.Host, time.Second)
-
-				if attempts > MaxAttemptsToConnect {
-					panic(err)
-				}
-
-				attempts += 1
+			if err != nil {
+				err = FormatError(err, "Connect(%#v, %#v)", network, url)
+				panic(err)
 			}
 
 			lbfrom, err := GetLbfrom(url, connection)
@@ -185,7 +196,7 @@ func balancerHttpGetTest(t *testing.T) {
 			}
 
 			addr := connection.LocalAddr().String()
-			t.Run("address: " + addr, func(t *testing.T) {
+			t.Run("address: "+addr, func(t *testing.T) {
 				for i := 0; i < HttpBalancerChecksPerTestAmount; i++ {
 					nextLbfrom, err := GetLbfrom(url, connection)
 
@@ -194,16 +205,7 @@ func balancerHttpGetTest(t *testing.T) {
 						panic(err)
 					}
 
-					if nextLbfrom != lbfrom {
-						err = FormatError(
-							fmt.Errorf("Expected: %v\nGot: %v", lbfrom, nextLbfrom),
-							"GetLbfrom(%v, %v)",
-							url, 
-							connection,
-						)
-
-						t.Error(err)
-					}
+					assert.Equal(t, lbfrom, nextLbfrom, "answer from the same server")
 				}
 			})
 
@@ -294,17 +296,15 @@ func GetBalancerIP(ipNet *net.IPNet) (net.IP, error) {
 	return nil, err
 }
 
-func GetInterface(ipNet *net.IPNet) (*net.Interface, error) {
-	var err error
-	var iface *net.Interface
+func GetInterface(ipNet *net.IPNet) (iface *net.Interface, err error) {
 	var i int
 
 	for range time.Tick(time.Second) {
 		iface, err = InterfaceByNetwork(ipNet)
 
-		if err != nil && i > 20 {
+		if err != nil && i > MaxAttemptsToGetInterface {
 			err = FormatError(err, "InterfaceByNetwork(%v)", ipNet)
-			return nil, err
+			return
 		}
 
 		if err == nil {
@@ -314,7 +314,7 @@ func GetInterface(ipNet *net.IPNet) (*net.Interface, error) {
 		i += 1
 	}
 
-	return iface, err
+	return
 }
 
 func localIPNetTest(t *testing.T) {
@@ -369,7 +369,7 @@ func localIPNetTest(t *testing.T) {
 			panic(err)
 		}
 
-		t.Run("CIDR: " + cidr, balancerHttpGetTest)
+		t.Run("CIDR: "+cidr, balancerHttpGetTest)
 	}
 }
 
@@ -393,15 +393,9 @@ func TestBalancer(t *testing.T) {
 			return
 		}
 
-		t.Run("cidr: " + cidr, func(t *testing.T) {
-			err := os.Setenv(CurrentNetwork, cidr)
-
-			if err != nil {
-				err = FormatError(err, "LoadInfo(%#v)", cidr)
-				panic(err)
-			}
-
-			err = UpdateTestNetwork(cidr)
+		t.Run("cidr: "+cidr, func(t *testing.T) {
+			CurrentNetwork = cidr
+			err := UpdateTestNetwork(cidr)
 
 			if err != nil {
 				err = FormatError(err, "UpdateTestNetwork(%#v)", cidr)
@@ -447,15 +441,9 @@ func TestBalancer(t *testing.T) {
 
 		cidr := ipNet.String()
 
-		t.Run("cidr: " + cidr, func(t *testing.T) {
-			err := os.Setenv(CurrentNetwork, cidr)
-
-			if err != nil {
-				err = FormatError(err, "LoadInfo(%#v)", cidr)
-				panic(err)
-			}
-
-			err = UpdateTestNetwork(cidr)
+		t.Run("cidr: "+cidr, func(t *testing.T) {
+			CurrentNetwork = cidr
+			err := UpdateTestNetwork(cidr)
 
 			if err != nil {
 				err = FormatError(err, "UpdateTestNetwork(%#v)", cidr)
