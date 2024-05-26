@@ -14,5 +14,14 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Integration tests
-      run: docker compose -f docker-compose.yaml -f docker-compose.test.yaml up --build --force-recreate --exit-code-from test
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.22'
+
+    - name: Build integration tests launcher
+      run: go test -c ./test-launcher/...
+
+    - name: Run integration tests
+      run: ./test-launcher.test
+
