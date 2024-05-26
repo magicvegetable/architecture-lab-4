@@ -308,7 +308,7 @@ func TestBalancer(t *testing.T) {
 		panic(err)
 	}
 
-	filterIPs := []net.IP{balancerIP}
+	filterIPs := []net.IP{balancerIP, ipNet.IP}
 	for i := 0; i < AmountOfChangeIP; i++ {
 		// TODO: fix ipv6 change addr
 		if balancerIP.To4() == nil {

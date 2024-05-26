@@ -5,10 +5,8 @@ import (
 	"strings"
 	"os/exec"
 	"math/rand/v2"
-	"slices"
 	"os"
 	"fmt"
-	"reflect"
 )
 
 import . "github.com/magicvegetable/architecture-lab-4/err"
@@ -203,13 +201,80 @@ func IPsContainsIP(ips []net.IP, ip net.IP) bool {
 		return false
 	}
 
+	if ip == nil {
+		return false
+	}
 	for _, ipsIP := range ips {
-		if reflect.DeepEqual(ipsIP, ip) {
+		if ipsIP == nil {
+			continue
+		}
+
+		if ipsIP.String() == ip.String() {
 			return true
 		}
 	}
 
 	return false
+}
+
+func indexNextIP(i int, ip net.IP) net.IP {
+	if ip[i] == 0xff {
+		ip[i] = 0
+		return indexNextIP(i - 1, ip)
+	}
+
+	ip[i] += 1
+
+	return ip
+}
+
+func nextIP(ip net.IP) net.IP {
+	lastIndex := len(ip) - 1
+
+	if ip[lastIndex] == 0xff {
+		ip[lastIndex] = 0
+		return indexNextIP(lastIndex, ip)
+	}
+
+	ip[lastIndex] += 1
+
+	return ip
+}
+
+func GetFirstFreeIP(ipNet *net.IPNet, ips []net.IP) (net.IP, error) {
+	if ipNet == nil {
+		err := FormatError(nil, "ipNet have to be not %#v", ipNet)
+		return nil, err
+	}
+
+	if ips == nil {
+		return ipNet.IP, nil
+	}
+
+	maxIP := append(net.IP{}, ipNet.IP...)
+
+	ones, bits := ipNet.Mask.Size()
+
+	freeBits := bits - ones
+	ipLenBytes := len(ipNet.IP)
+
+	for i := 0; i < freeBits; i++ {
+		bit := byte(1 << (i % 8))
+		maxIP[ipLenBytes - i / 8 - 1] |= bit
+	}
+
+	ip := append(net.IP{}, ipNet.IP...)
+
+	for IPsContainsIP(ips, ip) {
+		if ip.String() == maxIP.String() {
+			err := FormatError(nil, "ipNet %#v have no free ip", ipNet)
+			return nil, err
+		}
+
+		ip = nextIP(ip)
+	}
+
+	return ip, nil
 }
 
 func RandIPFilter(ipNet *net.IPNet, ips []net.IP) (net.IP, error) {
@@ -225,12 +290,7 @@ func RandIPFilter(ipNet *net.IPNet, ips []net.IP) (net.IP, error) {
 			return ip, err
 		}
 	}
-
-	return nil, FormatError(
-		nil,
-		"Exceed amount of try %v",
-		MAX_AMOUNT_OF_TRY,
-	)
+	return GetFirstFreeIP(ipNet, ips)
 }
 
 func IPtoCIDR(ip net.IP, mask net.IPMask) (string, error) {
@@ -266,31 +326,38 @@ func RandCIDR(ipNet *net.IPNet) (string, error) {
 	return cidr, err
 }
 
-// TODO: make real RandCIDRFilter
 func RandCIDRFilter(ipNet *net.IPNet, cidrs []string) (string, error) {
-	for i := 0; i < MAX_AMOUNT_OF_TRY; i++ {
-		ip, err := RandIP(ipNet)
+	if ipNet == nil {
+		err := FormatError(nil, "ipNet have to be not %#v", ipNet)
+		return "", err
+	}
+	var ips []net.IP
+	for _, cidr := range cidrs {
+		ip, _, err := net.ParseCIDR(cidr)
 
 		if err != nil {
-			err = FormatError(err, "RandIP(%#v)", ipNet)
-			return "", err
+			err = FormatError(err, "net.ParseCIDR(%#v)", cidr)			return "", err
 		}
 
-		cidr, err := IPtoCIDR(ip, ipNet.Mask)
-
-		if err != nil {
-			err = FormatError(err, "IPtoCIDR(%#v, %#v)", ip, ipNet.Mask)
-			return "", err
-		}
-
-		if !slices.Contains(cidrs, cidr) {
-			return cidr, err
+		if ipNet.Contains(ip) {
+			ips = append(ips, ip)
 		}
 	}
 
-	err := FormatError(nil, "Exceed max amount of try %v", MAX_AMOUNT_OF_TRY)
+	ip, err := RandIPFilter(ipNet, ips)
 
-	return "", err
+	if err != nil {
+		err = FormatError(err, "RandIPFilter(%#v, %#v)", ipNet, ips)
+		return "", err
+	}
+	cidr, err := IPtoCIDR(ip, ipNet.Mask)
+
+	if err != nil {
+		err = FormatError(err, "IPtoCIDR(%#v, %#v)", ip, ipNet.Mask)
+		return "", err
+	}
+
+	return cidr, err
 }
 
 func randIPNet(size int) *net.IPNet {
