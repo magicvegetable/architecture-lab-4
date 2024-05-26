@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"fmt"
+	"slices"
 )
 
 import . "github.com/magicvegetable/architecture-lab-4/err"
@@ -73,7 +74,7 @@ func AddCIDR(cidr, dev string) ([]byte, error) {
 	return res, err
 }
 
-func DelAllCIDR(dev string) ([]byte, error) {
+func DelAllCIDRFilter(dev string, reserved []string) ([]byte, error) {
 	iface, err := net.InterfaceByName(dev)
 
 	if err != nil {
@@ -89,6 +90,10 @@ func DelAllCIDR(dev string) ([]byte, error) {
 	res := []byte{}
 	for _, addr := range addrs {
 		cidr := addr.String()
+
+		if slices.Contains(reserved, cidr) {
+			continue
+		}
 
 		subres, err := DelCIDR(cidr, dev)
 
@@ -107,8 +112,23 @@ func DelAllCIDR(dev string) ([]byte, error) {
 	return res, nil
 }
 
+func DelAllCIDR(dev string) ([]byte, error) {
+	return DelAllCIDRFilter(dev, []string{})
+}
+
 func ChangeCIDR(cidr, dev string) ([]byte, error) {
-	_, err := DelAllCIDR(dev)
+	res, err := AddCIDR(cidr, dev)
+
+	if err != nil {
+		return nil, FormatError(
+			err,
+			"AddCIDR(%#v, %#v)",
+			cidr,
+			dev,
+		)
+	}
+
+	_, err = DelAllCIDRFilter(dev, []string{cidr})
 
 	if err != nil {
 		return nil, FormatError(
@@ -118,7 +138,7 @@ func ChangeCIDR(cidr, dev string) ([]byte, error) {
 		)
 	}
 
-	return AddCIDR(cidr, dev)
+	return res, err
 }
 
 func InterfaceByNetwork(ipNet *net.IPNet) (*net.Interface, error) {
@@ -193,7 +213,6 @@ func RandIP(ipNet *net.IPNet) (net.IP, error) {
 	return ip, nil
 }
 
-// TODO: make real RandIPFilter
 const MAX_AMOUNT_OF_TRY = 1024
 
 func IPsContainsIP(ips []net.IP, ip net.IP) bool {
@@ -204,6 +223,7 @@ func IPsContainsIP(ips []net.IP, ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
+
 	for _, ipsIP := range ips {
 		if ipsIP == nil {
 			continue
@@ -241,14 +261,9 @@ func nextIP(ip net.IP) net.IP {
 	return ip
 }
 
-func GetFirstFreeIP(ipNet *net.IPNet, ips []net.IP) (net.IP, error) {
+func MaxIP(ipNet *net.IPNet) net.IP {
 	if ipNet == nil {
-		err := FormatError(nil, "ipNet have to be not %#v", ipNet)
-		return nil, err
-	}
-
-	if ips == nil {
-		return ipNet.IP, nil
+		return nil
 	}
 
 	maxIP := append(net.IP{}, ipNet.IP...)
@@ -262,6 +277,21 @@ func GetFirstFreeIP(ipNet *net.IPNet, ips []net.IP) (net.IP, error) {
 		bit := byte(1 << (i % 8))
 		maxIP[ipLenBytes - i / 8 - 1] |= bit
 	}
+
+	return maxIP
+}
+
+func GetFirstFreeIP(ipNet *net.IPNet, ips []net.IP) (net.IP, error) {
+	if ipNet == nil {
+		err := FormatError(nil, "ipNet have to be not %#v", ipNet)
+		return nil, err
+	}
+
+	if ips == nil {
+		return ipNet.IP, nil
+	}
+
+	maxIP := MaxIP(ipNet)
 
 	ip := append(net.IP{}, ipNet.IP...)
 
@@ -290,6 +320,7 @@ func RandIPFilter(ipNet *net.IPNet, ips []net.IP) (net.IP, error) {
 			return ip, err
 		}
 	}
+
 	return GetFirstFreeIP(ipNet, ips)
 }
 
@@ -331,12 +362,14 @@ func RandCIDRFilter(ipNet *net.IPNet, cidrs []string) (string, error) {
 		err := FormatError(nil, "ipNet have to be not %#v", ipNet)
 		return "", err
 	}
+
 	var ips []net.IP
 	for _, cidr := range cidrs {
 		ip, _, err := net.ParseCIDR(cidr)
 
 		if err != nil {
-			err = FormatError(err, "net.ParseCIDR(%#v)", cidr)			return "", err
+			err = FormatError(err, "net.ParseCIDR(%#v)", cidr)
+			return "", err
 		}
 
 		if ipNet.Contains(ip) {
@@ -350,6 +383,7 @@ func RandCIDRFilter(ipNet *net.IPNet, cidrs []string) (string, error) {
 		err = FormatError(err, "RandIPFilter(%#v, %#v)", ipNet, ips)
 		return "", err
 	}
+
 	cidr, err := IPtoCIDR(ip, ipNet.Mask)
 
 	if err != nil {
@@ -538,3 +572,4 @@ func RandIPNetVersionFilterNoIntersect(version int, ipNets []*net.IPNet) (*net.I
 		MAX_AMOUNT_OF_TRY,
 	)
 }
+

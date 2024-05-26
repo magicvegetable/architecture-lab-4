@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"net"
 	"sync"
+	"log"
 )
 
 const (
@@ -158,11 +159,25 @@ func balancerHttpGetTest(t *testing.T) {
 	for i := 0; i < HttpBalancerTestsAmount; i++ {
 		go func() {
 			network := "tcp"
-			connection, err := net.Dial(network, url.Host)
+			log.Println("gonna connect...")
+			connection, err := net.DialTimeout(network, url.Host, time.Second)
 
 			if err != nil {
 				err = FormatError(err, "net.Dial(%#v, %#v)", network, url.Host)
-				panic(err)
+
+				ipNet, _ := GetLocalNetwork()
+
+				if ipNet.IP.To4() == nil {
+					// TODO:
+					// figure out why ipv6 connection
+					// is not established on the first try
+					for err != nil {
+						log.Println("trying connect...")
+						connection, err = net.DialTimeout(network, url.Host, time.Second)
+					}
+				} else {
+					panic(err)
+				}
 			}
 
 			lbfrom, err := GetLbfrom(url, connection)
@@ -297,7 +312,7 @@ func TestBalancer(t *testing.T) {
 	iface, err := InterfaceByNetwork(ipNet)
 
 	if err != nil {
-		err = FormatError(err, "InterfaceByNetwork(%#v)", ipNet)
+		err = FormatError(err, "InterfaceByNetwork(%v)", ipNet)
 		panic(err)
 	}
 
@@ -310,12 +325,6 @@ func TestBalancer(t *testing.T) {
 
 	filterIPs := []net.IP{balancerIP, ipNet.IP}
 	for i := 0; i < AmountOfChangeIP; i++ {
-		// TODO: fix ipv6 change addr
-		if balancerIP.To4() == nil {
-			t.Run("ipv6 ", balancerHttpGetTest)
-			continue
-		}
-
 		ip, err := RandIPFilter(ipNet, filterIPs)
 
 		if err != nil {

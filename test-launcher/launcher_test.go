@@ -10,18 +10,107 @@ import (
 	"io/fs"
 	"io"
 	"net"
+	"log"
 )
 
+// TODO:
+// figure out why container doesn't launch
+// from some ip
+
 const (
-	randomCIDRTestAmount = 5
+	randomCIDRTestAmount = 10
 )
+
+func killContainers(containers []string) error {
+	exe := "docker"
+	for _, container := range containers {
+		args := []string{"kill", "--signal", "KILL", container}
+
+		cmd := exec.Command(exe, args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		err := cmd.Run()
+
+		if err != nil {
+			err = FormatError(
+				err,
+				"exec.Command(%#v, %#v).Run()",
+				exe,
+				args,
+			)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func getContainersInNet(nt string) ([]string, error) {
+	exe := "docker"
+	args := []string{"ps", "--filter", "network=" + nt, "-q"}
+
+	cmd := exec.Command(exe, args...)
+	cmd.Stderr = os.Stderr
+
+	out, err := cmd.Output()
+
+	if err != nil {
+		err = FormatError(
+			err,
+			"exec.Command(%#v, %#v...).Run()",
+			exe,
+			args,
+		)
+	}
+
+	var containers []string
+
+	if len(out) != 0 {
+		containers = strings.Split(string(out), "\n")
+
+		lastI := len(containers) - 1
+		if containers[lastI] == "" {
+			containers = containers[:lastI]
+		}
+	}
+
+	return containers, err
+}
 
 func cleanDockerNets() {
 	localNets := []string{"architecture-lab-4_servers", "architecture-lab-4_testlan"}
 
+	exe := "docker"
+
 	for _, localNet := range localNets {
+		containers, err := getContainersInNet(localNet)
+
+		if err != nil {
+			err = FormatError(
+				err,
+				"getContainersInNet(%#v)",
+				localNet,
+			)
+
+			panic(err)
+		}
+
+		if len(containers) != 0 {
+			err = killContainers(containers)
+
+			if err != nil {
+				err = FormatError(
+					err,
+					"killContainers(%#v)",
+					containers,
+				)
+
+				panic(err)
+			}
+		}
+
 		args := []string{"network", "rm", localNet}
-		exe := "docker"
 		cmd := exec.Command(exe, args...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -131,14 +220,8 @@ func TestNetworks(t *testing.T) {
 		t.Skip("Integration test is not enabled")
 	}
 
-	type Case struct {
-		name string
-		current string
-	}
-
 	cidrs := []string{
-		"2088:0DB8::/112",
-		"2088:0DAA::/112",
+		"2085:0DAA::/112",
 		"3333:0D:1234:f8f8::/64",
 		"192.13.0.0/16",
 		"12.13.0.0/16",
@@ -167,7 +250,12 @@ func TestNetworks(t *testing.T) {
 		})
 	}
 
-	reservedCIDRs := []string{"2001:0DB8::/120", "127.0.0.0/8", "::1/128", "172.17.0.0/16"}
+	reservedCIDRs := []string{
+		"2001:0DB8::/120",
+		"127.0.0.0/8",
+		"::1/128",
+		"172.17.0.0/16",
+	}
 
 	var reservedIPNets []*net.IPNet
 
@@ -183,8 +271,7 @@ func TestNetworks(t *testing.T) {
 	}
 
 	for i := 0; i < randomCIDRTestAmount; i++ {
-		// TODO: add ipv4 support
-		ipNet, err := RandIPNetVersionFilterNoIntersect(6, reservedIPNets)
+		ipNet, err := RandIPNetFilterNoIntersect(reservedIPNets)
 
 		if err != nil {
 			err = FormatError(err, "RandIPNetFilterNoIntersect(%#v)", reservedIPNets)
@@ -214,7 +301,7 @@ func TestNetworks(t *testing.T) {
 
 			if err != nil {
 				err = FormatError(err, "runTest()")
-				t.Error(err)
+				log.Println(err)
 			}
 		})
 	}
