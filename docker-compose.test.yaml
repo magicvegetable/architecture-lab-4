@@ -11,5 +11,14 @@ services:
       - balancer
 
   balancer:
-    # Для тестів включаємо режим відлагодження, коли балансувальник додає інформацію, кому було відправлено запит.
+     networks:
+      - testlan
     command: ["lb", "--trace=true"]
+
+networks:
+  testlan:
+    internal: true
+    enable_ipv6: @ENABLE_IPv6@
+    ipam:
+      config:
+        - subnet: @CURRENT_NET@
