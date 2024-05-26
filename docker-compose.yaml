@@ -1,5 +1,11 @@
+name: architecture-lab-4
+
 networks:
   servers:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 2001:0DB8::/120
 
 services:
 
@@ -10,6 +16,8 @@ services:
       - servers
     ports:
       - 8090:8090
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
 
   server1:
     build: .
@@ -17,6 +25,8 @@ services:
       - servers
     expose:
       - 8080
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
 
   server2:
     build: .
@@ -24,6 +34,8 @@ services:
       - servers
     expose:
       - 8080
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
 
   server3:
     build: .
@@ -31,3 +43,5 @@ services:
       - servers
     expose:
       - 8080
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0

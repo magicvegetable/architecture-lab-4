@@ -1,8 +1,0 @@
-FROM golang:1.22 as build
-
-WORKDIR /go/src/practice-4
-COPY . .
-
-ENV INTEGRATION_TEST=1
-EXPOSE 8090/tcp
-CMD ["go", "test", "./integration"]

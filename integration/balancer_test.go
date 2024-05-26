@@ -1,64 +1,61 @@
 package integration
 
+import . "github.com/magicvegetable/architecture-lab-4/err"
 import (
-	"bufio"
-	"bytes"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"sync"
 	"testing"
 	"time"
+	"bytes"
+	"io"
+	"bufio"
+	"net"
+	"sync"
 )
-
-const baseAddress = "http://balancer:8090"
-
-var client = http.Client{
-	Timeout: 3 * time.Second,
-}
 
 const (
-	READ_DEADLINE                        = 1 * time.Second
-	HTTP_BALANCER_TESTS_AMOUNT           = 10
-	HTTP_BALANCER_CHECKS_PER_TEST_AMOUNT = 10
-	COPY_BUFFER_SIZE                     = 4096
+	ReadDeadline = 10 * time.Millisecond
+	HttpBalancerTestsAmount = 3
+	HttpBalancerChecksPerTestAmount = 3
+	CopyBufferSize = 128
+	AmountOfChangeIP = 3
 )
 
+var	BaseAddress = "http://balancer:8090"
+
 func Copy(out io.Writer, connection net.Conn) error {
-	size := COPY_BUFFER_SIZE
+	size := CopyBufferSize
 	buffer := make([]byte, size)
 
 	for {
-		deadline := time.Now().Add(READ_DEADLINE)
+		deadline := time.Now().Add(ReadDeadline)
 		connection.SetReadDeadline(deadline)
 		_, err := connection.Read(buffer)
 
 		if err != nil {
-
 			if err != io.EOF && time.Now().Before(deadline) {
-				panic("cannot read from io.Reader...")
+				return FormatError(
+					err,
+					"%v.Read(%v)",
+					connection,
+					buffer,
+				)
 			}
 
-			break
+			break;
 		}
 
-		n, err := out.Write(buffer)
+		_, err = out.Write(buffer)
 
 		if err != nil {
-			panic("cannot write to io.Writer...")
-		}
-
-		for n != len(buffer) {
-			i, err := out.Write(buffer[n:])
-
-			if err != nil {
-				panic("cannot write to io.Writer...")
-			}
-
-			n += i
+			return FormatError(
+				err,
+				"%v.Write(%v)",
+				out,
+				buffer,
+			)
 		}
 
 		buffer = make([]byte, size)
@@ -67,79 +64,133 @@ func Copy(out io.Writer, connection net.Conn) error {
 	return nil
 }
 
-func GetLbfrom(url *url.URL, connection net.Conn) (string, error) {
-	_, err := connection.Write([]byte("GET " + url.Path + " HTTP/1.1\r\n" + "Host: " + url.Hostname() + "\r\n\r\n"))
-
+func ReadResponse(url *url.URL, connection net.Conn) (*http.Response, error) {
 	buffer := &bytes.Buffer{}
 
-	err = Copy(buffer, connection)
+	err := Copy(buffer, connection)
 
 	if err != nil {
-		return "", err
+		return nil, FormatError(
+			err,
+			"Copy(%v, %v)",
+			buffer,
+			connection,
+		)
 	}
 
 	req, err := http.NewRequest("GET", url.String(), nil)
 
 	if err != nil {
-		return "", err
+		return nil, FormatError(
+			err,
+			"http.NewRequest(\"GET\", %v, nil)",
+			url.String(),
+		)
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(buffer), req)
 
 	if err != nil {
-		return "", err
+		return nil, FormatError(
+			err,
+			"http.ReadResponse(%v, %v)",
+			bufio.NewReader(buffer),
+			req,
+		)
+	}
+
+	return resp, nil
+}
+
+func GetLbfrom(url *url.URL, connection net.Conn) (string, error) {
+	requestStr := "GET " + url.Path + " HTTP/1.1\r\n" + "Host: " + url.Hostname() + "\r\n\r\n"
+	_, err := connection.Write([]byte(requestStr))
+
+	if err != nil {
+		return "", FormatError(
+			err,
+			"%v.Write([]byte(%v))",
+			connection,
+			requestStr,
+		)
+	}
+
+	resp, err := ReadResponse(url, connection)
+
+	if err != nil {
+		return "", FormatError(
+			err,
+			"ReadResponse(%v, %v)",
+			url,
+			connection,
+		)
 	}
 
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("request have no success")
+		return "", FormatError(
+			fmt.Errorf("%v", requestStr),
+			"http.Response.StatusCode == %v for request",
+			resp.StatusCode,
+		)
 	}
 
 	return resp.Header.Get("Lb-from"), nil
 }
 
-func TestBalancerHttpGet(t *testing.T) {
+func balancerHttpGetTest(t *testing.T) {
 	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
 		t.Skip("Integration test is not enabled")
 	}
 
-	url, err := url.Parse(baseAddress + "/api/v1/some-data")
+	urlStr := BaseAddress + "/api/v1/some-data"
+	url, err := url.Parse(urlStr)
 
 	if err != nil {
+		err = FormatError(err, "url.Parse(%v)", urlStr)
 		panic(err)
 	}
 
 	var testsM sync.Mutex
-	testsLeft := HTTP_BALANCER_TESTS_AMOUNT
+	testsLeft := HttpBalancerTestsAmount
 
 	wait := make(chan struct{})
 
-	for i := 0; i < HTTP_BALANCER_TESTS_AMOUNT; i++ {
+	for i := 0; i < HttpBalancerTestsAmount; i++ {
 		go func() {
-			connection, err := net.Dial("tcp", url.Host)
+			network := "tcp"
+			connection, err := net.Dial(network, url.Host)
 
 			if err != nil {
+				err = FormatError(err, "net.Dial(%#v, %#v)", network, url.Host)
 				panic(err)
 			}
 
 			lbfrom, err := GetLbfrom(url, connection)
 
 			if err != nil {
+				err = FormatError(err, "GetLbfrom(%#v, %#v)", url, connection)
 				panic(err)
 			}
 
 			addr := connection.LocalAddr().String()
-			t.Run("address: "+addr, func(t *testing.T) {
-				for i := 0; i < HTTP_BALANCER_CHECKS_PER_TEST_AMOUNT; i++ {
+			t.Run("address: " + addr, func(t *testing.T) {
+				for i := 0; i < HttpBalancerChecksPerTestAmount; i++ {
 					nextLbfrom, err := GetLbfrom(url, connection)
 
 					if err != nil {
-						t.Fatal(err)
-						t.SkipNow()
+						err = FormatError(err, "GetLbfrom(%v, %v)", url, connection)
+						panic(err)
 					}
 
 					if nextLbfrom != lbfrom {
-						t.Fatal("Got different Lb-from for address: " + addr)
-						t.SkipNow()
+						err = FormatError(
+							fmt.Errorf("Expected: %v\nGot: %v", lbfrom, nextLbfrom),
+							"GetLbfrom(%v, %v)",
+							url, 
+							connection,
+						)
+
+						t.Error(err)
 					}
 				}
 			})
@@ -161,25 +212,132 @@ func TestBalancerHttpGet(t *testing.T) {
 	<-wait
 }
 
+func BenchmarkBalancer(b *testing.B) {
+	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
+		b.Skip("Integration test is not enabled")
+	}
+
+	client := http.Client{Timeout: 3 * time.Second}
+
+	urlBalancer := fmt.Sprintf("%s/api/v1/some-data", BaseAddress)
+	for i := 0; i < b.N; i++ {
+		resp, err := client.Get(urlBalancer)
+		if err != nil {
+			err = FormatError(
+				err,
+				"%#v.Get(%#v)",
+				client,
+				urlBalancer,
+			)
+
+			b.Error(err)
+		}
+
+		if resp.StatusCode != 200 {
+			bodyBytes, err := io.ReadAll(resp.Request.Body)
+
+			if err != nil {
+				err = FormatError(
+					err,
+					"io.ReadAll(%#v)",
+					resp.Request.Body,
+				)
+				panic(err)
+			}
+
+			err = FormatError(
+				fmt.Errorf("%#v", string(bodyBytes)),
+				"%#v.StatusCode != %#v for request",
+				resp,
+				resp.StatusCode,
+			)
+			b.Error(err)
+		}
+
+		resp.Body.Close()
+	}
+}
+
+func GetBalancerIP(ipNet *net.IPNet) (net.IP, error) {
+	addrs, err := net.LookupHost("balancer")
+
+	if err != nil {
+		return nil, FormatError(
+			err,
+			"net.LookupHost(%#v)",
+			"balancer",
+		)
+	}
+
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+
+		if ipNet.Contains(ip) {
+			return ip, nil
+		}
+	}
+
+	err = FormatError(err, "Not balancer ip for network %#v", ipNet)
+
+	return nil, err
+}
+
 func TestBalancer(t *testing.T) {
 	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
 		t.Skip("Integration test is not enabled")
 	}
 
-	// TODO: Реалізуйте інтеграційний тест для балансувальникка.
+	ipNet, err := GetLocalNetwork()
 
-	for i := 0; i < 6; i++ {
-		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
-		if err != nil {
-			t.Error(err)
-		}
-		fmt.Printf("response from [%s]", resp.Header.Get("lb-from"))
-		resp.Body.Close()
+	if err != nil {
+		err = FormatError(err, "GetLocalNetwork()")
+		panic(err)
 	}
-	// t.SkipNow()
 
+	iface, err := InterfaceByNetwork(ipNet)
+
+	if err != nil {
+		err = FormatError(err, "InterfaceByNetwork(%#v)", ipNet)
+		panic(err)
+	}
+
+	balancerIP, err := GetBalancerIP(ipNet)
+
+	if err != nil {
+		err = FormatError(err, "GetBalancerIP()")
+		panic(err)
+	}
+
+	filterIPs := []net.IP{balancerIP}
+	for i := 0; i < AmountOfChangeIP; i++ {
+		// TODO: fix ipv6 change addr
+		if balancerIP.To4() == nil {
+			t.Run("ipv6 ", balancerHttpGetTest)
+			continue
+		}
+
+		ip, err := RandIPFilter(ipNet, filterIPs)
+
+		if err != nil {
+			err = FormatError(err, "RandIPFilter(%#v, %#v)", ipNet, filterIPs)
+			panic(err)
+		}
+
+		cidr, err := IPtoCIDR(ip, ipNet.Mask)
+
+		if err != nil {
+			err = FormatError(err, "IPtoCIDR(%#v, %#v)", ip, ipNet.Mask)
+			panic(err)
+		}
+
+		_, err = ChangeCIDR(cidr, iface.Name)
+
+		if err != nil {
+			err = FormatError(err, "ChangeIpAddr(%#v, %#v)", cidr, iface.Name)
+			panic(err)
+		}
+
+		t.Run("CIDR: " + cidr, balancerHttpGetTest)
+	}
 }
 
-func BenchmarkBalancer(b *testing.B) {
-	// TODO: Реалізуйте інтеграційний бенчмарк для балансувальникка.
-}
