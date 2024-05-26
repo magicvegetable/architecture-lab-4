@@ -11,10 +11,10 @@ services:
       - balancer
     cap_add:
       - NET_ADMIN
-    environment:
-      - CURRENT_NET=@CURRENT_NET@
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=0
+    volumes:
+      - ./fifo:/fifo
 
   balancer:
     networks:
@@ -23,7 +23,3 @@ services:
 
 networks:
   testlan:
-    enable_ipv6: @ENABLE_IPv6@
-    ipam:
-      config:
-        - subnet: @CURRENT_NET@

@@ -8,6 +8,8 @@ import (
 	"os"
 	"fmt"
 	"slices"
+	"log"
+	"bytes"
 )
 
 import . "github.com/magicvegetable/architecture-lab-4/err"
@@ -34,13 +36,31 @@ func GetLocalNetwork() (*net.IPNet, error) {
 	return localNet, err
 }
 
-func DelCIDR(cidr, dev string) ([]byte, error) {
-	args := []string{"addr", "del", cidr, "dev", dev}
-	exe := "ip"
+type Logger struct {
+	Buffer bytes.Buffer
+}
 
+func (l *Logger) Write(p []byte) (n int, err error) {
+	os.Stderr.Write(p)
+	return l.Buffer.Write(p)
+}
+
+func (l *Logger) Flush() []byte {
+	content := l.Buffer.Bytes()
+	log.Println(string(content))
+	return content
+}
+
+var logger Logger
+
+func RunLogCommand(exe string, args []string) ([]byte, error) {
 	cmd := exec.Command(exe, args...)
 
-	res, err := cmd.Output()
+	cmd.Stdout = &logger
+	cmd.Stderr = &logger
+
+	err := cmd.Run()
+	res := logger.Flush()
 
 	if err != nil {
 		return res, FormatError(
@@ -54,24 +74,16 @@ func DelCIDR(cidr, dev string) ([]byte, error) {
 	return res, err
 }
 
+func DelCIDR(cidr, dev string) ([]byte, error) {
+	args := []string{"addr", "del", cidr, "dev", dev}
+	exe := "ip"
+	return RunLogCommand(exe, args)
+}
+
 func AddCIDR(cidr, dev string) ([]byte, error) {
 	args := []string{"addr", "add", cidr, "dev", dev}
 	exe := "ip"
-
-	cmd := exec.Command(exe, args...)
-
-	res, err := cmd.Output()
-
-	if err != nil {
-		return res, FormatError(
-			err,
-			"exec.Command(%#v, %#v...).Output()",
-			exe,
-			args,
-		)
-	}
-
-	return res, err
+	return RunLogCommand(exe, args)
 }
 
 func DelAllCIDRFilter(dev string, reserved []string) ([]byte, error) {
@@ -520,7 +532,198 @@ func IPNetIntersectIPNets(ipNet *net.IPNet, ipNets []*net.IPNet) (bool, error) {
 	return false, nil
 }
 
-// TODO: make real RandIPNetFilterNoIntersect
+func getBitsSizeByVersion(version int) (int, error) {
+	maskBits := map[int]int{
+		4: 32,
+		6: 128,
+	}
+
+	bits, contains := maskBits[version]
+
+	if !contains {
+		err := FormatError(nil, "Not supported version %#v", version)
+		return 0, err
+	}
+
+	return bits, nil
+}
+
+func ipNetIncludes(ipNet *net.IPNet, subIPNet *net.IPNet) bool {
+	if ipNet == nil || subIPNet == nil {
+		return false
+	}
+
+	ipNetOnes, ipNetBits := ipNet.Mask.Size()
+
+	subIPNetOnes, subIPNetBits := subIPNet.Mask.Size()
+
+	if ipNetBits != subIPNetBits {
+		return false
+	}
+
+	if subIPNetOnes < ipNetOnes {
+		return false
+	}
+
+	for i := 0; i < ipNetOnes; i++ {
+		byteI := i / 8
+		bitI := 7 - i % 8
+
+		settedBit := byte(1 << bitI)
+
+		ipNetBit := ipNet.IP[byteI]
+		ipNetBit &= settedBit
+
+		subIPNetBit := subIPNet.IP[byteI]
+		subIPNetBit &= settedBit
+
+		if ipNetBit != subIPNetBit {
+			return false
+		}
+	}
+
+	return true
+}
+
+func ipNetExclude(ipNet *net.IPNet, subIPNet *net.IPNet) []*net.IPNet {
+	if ipNet == nil {
+		return nil
+	}
+
+	if !ipNetIncludes(ipNet, subIPNet) {
+		return []*net.IPNet{ipNet}
+	}
+
+	ipNetOnes, ipNetBits := ipNet.Mask.Size()
+
+	subIPNetOnes, _ := subIPNet.Mask.Size()
+
+	var leftIPNets []*net.IPNet
+
+	for i := ipNetOnes; i < subIPNetOnes; i++ {
+		byteI := i / 8
+		bitI := 7 - i % 8
+
+		leftIP := make(net.IP, len(ipNet.IP))
+		copy(leftIP, subIPNet.IP[:byteI + 1])
+
+
+		leftIPNet := &net.IPNet{
+			IP: leftIP,
+			Mask: net.CIDRMask(i + 1, ipNetBits),
+		}
+
+		settedBit := byte(1 << bitI)
+
+		leftIPNetBit := leftIPNet.IP[byteI]
+		leftIPNetBit &= settedBit
+
+		if leftIPNetBit == 0 {
+			leftIPNet.IP[byteI] += settedBit
+		} else {
+			leftIPNet.IP[byteI] -= settedBit
+		}
+
+		clearBits := bitI
+
+		leftIPNet.IP[byteI] >>= clearBits
+		leftIPNet.IP[byteI] <<= clearBits
+
+		leftIPNets = append(leftIPNets, leftIPNet)
+	}
+
+	return leftIPNets
+}
+
+func FreeIPNets(version int, ipNets []*net.IPNet) ([]*net.IPNet, error) {
+	bitsSize, err := getBitsSizeByVersion(version)
+
+	if err != nil {
+		err = FormatError(err, "getBitsSizeByVersion(%#v)", version)
+		return nil, err
+	}
+
+	freeIPNets := []*net.IPNet{
+		// the biggest net
+		&net.IPNet{
+			Mask: net.CIDRMask(0, bitsSize),
+			IP: make(net.IP, bitsSize / 8),
+		},
+	}
+
+	for _, ipNet := range ipNets {
+		var filteredFreeIPNets []*net.IPNet
+
+		for _, freeIPNet := range freeIPNets {
+			if ipNetIncludes(ipNet, freeIPNet) {
+				continue
+			}
+
+			if !ipNetIncludes(freeIPNet, ipNet) {
+				filteredFreeIPNets = append(filteredFreeIPNets, freeIPNet)
+				continue
+			}
+
+			subFreeIPNets := ipNetExclude(freeIPNet, ipNet)
+
+			filteredFreeIPNets = append(filteredFreeIPNets, subFreeIPNets...)
+		}
+
+		freeIPNets = filteredFreeIPNets
+	}
+
+	return freeIPNets, nil
+}
+
+func RandIPNetFilterNoIntersectMinDiff(ipNets []*net.IPNet, diff int) (*net.IPNet, error) {
+	for i := 0; i < MAX_AMOUNT_OF_TRY; i++ {
+		randIPNet := RandIPNet()
+
+		ones, bits := randIPNet.Mask.Size()
+
+		if bits - ones < diff {
+			continue
+		}
+
+		intersect, err := IPNetIntersectIPNets(randIPNet, ipNets)
+
+		if err != nil {
+			err = FormatError(err, "IPNetIntersectIPNets(%#v, %#v)", randIPNet, ipNets)
+			return nil, err
+		}
+
+		if !intersect {
+			return randIPNet, err
+		}
+	}
+
+	version := []int{4,6}[rand.Int() % 2]
+
+	freeIPNets, err := FreeIPNets(version, ipNets)
+
+	if err != nil {
+		err = FormatError(err, "freeIPNets(%#v, %#v)", version, ipNets)
+		return nil, err
+	}
+
+	if len(freeIPNets) == 0 {
+		return nil, err
+	}
+
+	var filteredFreeIPNets []*net.IPNet
+	for _, freeIPNet := range freeIPNets {
+		ones, bits := freeIPNet.Mask.Size()
+
+		if bits - ones < diff {
+			continue
+		}
+
+		filteredFreeIPNets = append(filteredFreeIPNets, freeIPNet)
+	}
+
+	return filteredFreeIPNets[rand.Int() % len(filteredFreeIPNets)], nil
+}
+
 func RandIPNetFilterNoIntersect(ipNets []*net.IPNet) (*net.IPNet, error) {
 	for i := 0; i < MAX_AMOUNT_OF_TRY; i++ {
 		randIPNet := RandIPNet()
@@ -537,14 +740,22 @@ func RandIPNetFilterNoIntersect(ipNets []*net.IPNet) (*net.IPNet, error) {
 		}
 	}
 
-	return nil, FormatError(
-		nil,
-		"Exceed amount of try %v",
-		MAX_AMOUNT_OF_TRY,
-	)
+	version := []int{4,6}[rand.Int() % 2]
+
+	freeIPNets, err := FreeIPNets(version, ipNets)
+
+	if err != nil {
+		err = FormatError(err, "freeIPNets(%#v, %#v)", version, ipNets)
+		return nil, err
+	}
+
+	if len(freeIPNets) == 0 {
+		return nil, err
+	}
+
+	return freeIPNets[rand.Int() % len(freeIPNets)], nil
 }
 
-// TODO: make real RandIPNetVersionFilterNoIntersect
 func RandIPNetVersionFilterNoIntersect(version int, ipNets []*net.IPNet) (*net.IPNet, error) {
 	for i := 0; i < MAX_AMOUNT_OF_TRY; i++ {
 		randIPNet, err := RandIPNetVersion(version)
@@ -566,10 +777,17 @@ func RandIPNetVersionFilterNoIntersect(version int, ipNets []*net.IPNet) (*net.I
 		}
 	}
 
-	return nil, FormatError(
-		nil,
-		"Exceed amount of try %v",
-		MAX_AMOUNT_OF_TRY,
-	)
+	freeIPNets, err := FreeIPNets(version, ipNets)
+
+	if err != nil {
+		err = FormatError(err, "freeIPNets(%#v, %#v)", version, ipNets)
+		return nil, err
+	}
+
+	if len(freeIPNets) == 0 {
+		return nil, err
+	}
+
+	return freeIPNets[rand.Int() % len(freeIPNets)], nil
 }
 

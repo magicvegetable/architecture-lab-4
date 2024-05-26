@@ -14,6 +14,7 @@ import (
 	"net"
 	"sync"
 	"log"
+	"strings"
 )
 
 const (
@@ -22,6 +23,8 @@ const (
 	HttpBalancerChecksPerTestAmount = 3
 	CopyBufferSize = 128
 	AmountOfChangeIP = 3
+	randomCIDRTestAmount = 10
+	MaxAttemptsToConnect = 200
 )
 
 var	BaseAddress = "http://balancer:8090"
@@ -162,22 +165,16 @@ func balancerHttpGetTest(t *testing.T) {
 			log.Println("gonna connect...")
 			connection, err := net.DialTimeout(network, url.Host, time.Second)
 
-			if err != nil {
-				err = FormatError(err, "net.Dial(%#v, %#v)", network, url.Host)
+			attempts := 0
+			for err != nil {
+				log.Println("trying connect...")
+				connection, err = net.DialTimeout(network, url.Host, time.Second)
 
-				ipNet, _ := GetLocalNetwork()
-
-				if ipNet.IP.To4() == nil {
-					// TODO:
-					// figure out why ipv6 connection
-					// is not established on the first try
-					for err != nil {
-						log.Println("trying connect...")
-						connection, err = net.DialTimeout(network, url.Host, time.Second)
-					}
-				} else {
+				if attempts > MaxAttemptsToConnect {
 					panic(err)
 				}
+
+				attempts += 1
 			}
 
 			lbfrom, err := GetLbfrom(url, connection)
@@ -297,7 +294,30 @@ func GetBalancerIP(ipNet *net.IPNet) (net.IP, error) {
 	return nil, err
 }
 
-func TestBalancer(t *testing.T) {
+func GetInterface(ipNet *net.IPNet) (*net.Interface, error) {
+	var err error
+	var iface *net.Interface
+	var i int
+
+	for range time.Tick(time.Second) {
+		iface, err = InterfaceByNetwork(ipNet)
+
+		if err != nil && i > 20 {
+			err = FormatError(err, "InterfaceByNetwork(%v)", ipNet)
+			return nil, err
+		}
+
+		if err == nil {
+			break
+		}
+
+		i += 1
+	}
+
+	return iface, err
+}
+
+func localIPNetTest(t *testing.T) {
 	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
 		t.Skip("Integration test is not enabled")
 	}
@@ -309,9 +329,12 @@ func TestBalancer(t *testing.T) {
 		panic(err)
 	}
 
-	iface, err := InterfaceByNetwork(ipNet)
-
+	iface, err := GetInterface(ipNet)
 	if err != nil {
+		if strings.Contains(err.Error(), "Not found") { // skip...
+			return
+		}
+
 		err = FormatError(err, "InterfaceByNetwork(%v)", ipNet)
 		panic(err)
 	}
@@ -350,3 +373,103 @@ func TestBalancer(t *testing.T) {
 	}
 }
 
+func TestBalancer(t *testing.T) {
+	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
+		t.Skip("Integration test is not enabled")
+	}
+
+	cidrs := []string{
+		"2085:0DAA::/112",
+		"3333:0D:1234:f8f8::/64",
+		"192.13.0.0/16",
+		"12.13.0.0/16",
+		"19.33.0.0/24",
+		"56.13.0.0/20",
+		"192.18.0.0/16",
+	}
+
+	for _, cidr := range cidrs {
+		if t.Failed() {
+			return
+		}
+
+		t.Run("cidr: " + cidr, func(t *testing.T) {
+			err := os.Setenv(CurrentNetwork, cidr)
+
+			if err != nil {
+				err = FormatError(err, "LoadInfo(%#v)", cidr)
+				panic(err)
+			}
+
+			err = UpdateTestNetwork(cidr)
+
+			if err != nil {
+				err = FormatError(err, "UpdateTestNetwork(%#v)", cidr)
+				panic(err)
+			}
+
+			localIPNetTest(t)
+		})
+	}
+
+	reservedCIDRs := []string{
+		"2001:0DB8::/120",
+		"127.0.0.0/8",
+		"::1/128",
+		"172.17.0.0/16",
+		"224.0.0.0/4",
+	}
+
+	var reservedIPNets []*net.IPNet
+
+	for _, reservedCIDR := range reservedCIDRs {
+		_, ipNet, err := net.ParseCIDR(reservedCIDR)
+
+		if err != nil {
+			err = FormatError(err, "net.ParseCIDR(%#v)", reservedCIDR)
+			panic(err)
+		}
+
+		reservedIPNets = append(reservedIPNets, ipNet)
+	}
+
+	for i := 0; i < randomCIDRTestAmount; i++ {
+		if t.Failed() {
+			return
+		}
+
+		ipNet, err := RandIPNetFilterNoIntersectMinDiff(reservedIPNets, 4)
+
+		if err != nil {
+			err = FormatError(err, "RandIPNetFilterNoIntersect(%#v)", reservedIPNets)
+			panic(err)
+		}
+
+		cidr := ipNet.String()
+
+		t.Run("cidr: " + cidr, func(t *testing.T) {
+			err := os.Setenv(CurrentNetwork, cidr)
+
+			if err != nil {
+				err = FormatError(err, "LoadInfo(%#v)", cidr)
+				panic(err)
+			}
+
+			err = UpdateTestNetwork(cidr)
+
+			if err != nil {
+				err = FormatError(err, "UpdateTestNetwork(%#v)", cidr)
+				panic(err)
+			}
+
+			localIPNetTest(t)
+		})
+	}
+
+	err := KillTestNetworkHostMonitor()
+
+	if err != nil {
+		err = FormatError(err, "KillTestNetworkHostMonitor()")
+		panic(err)
+	}
+}

@@ -1,4 +1,3 @@
 out
 build
-/docker-compose.test.yaml
 test-launcher.test
