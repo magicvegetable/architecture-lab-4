@@ -14,14 +14,24 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
         go-version: '1.22'
 
-    - name: Build integration tests launcher
-      run: go test -c ./test-launcher/...
+    - name: Build test network manager
+      run: go build -o manager  ./testnet-manager/...
 
-    - name: Run integration tests
-      run: ./test-launcher.test
+    - name: Run test network manager
+      run:  ./manager &
+
+    - name: Run integration test
+      run: docker compose -f docker-compose.yaml -f docker-compose.test.yaml up --build --force-recreate --exit-code-from test
+
+    - name: Build unit test launcher
+      run: docker build -t unit:test -f unit-test.dockerfile .
+
+    - name: Run unit test
+      run: docker run --rm unit:test
 

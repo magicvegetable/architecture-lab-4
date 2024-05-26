@@ -1,25 +1,25 @@
 package integration
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"os/exec"
-	"slices"
+	"bufio"
 	"time"
+	"encoding/json"
+	"slices"
+	"io"
+	"net"
 )
 
 var (
 	RunningContainers = map[string]string{
 		"architecture-lab-4-balancer-1": "balancer",
-		"architecture-lab-4-test-1":     "",
+		"architecture-lab-4-test-1": "",
 	}
 
-	TestNetwork  = "architecture-lab-4_testlan"
-	FifoPath     = "/fifo"
+	TestNetwork = "architecture-lab-4_testlan"
+	FifoPath = "/fifo"
 	HostFifoPath = "./fifo"
 )
 
@@ -37,7 +37,7 @@ func RunCommand(exe string, args []string) error {
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
+	
 	return cmd.Run()
 }
 
@@ -116,8 +116,8 @@ func CreateNetwork(network, cidr string) error {
 
 	ones, bits := ipNet.Mask.Size()
 
-	if bits-ones > 1 {
-		ipNet.IP[len(ipNet.IP)-1] += 1
+	if bits - ones > 1 {
+		ipNet.IP[len(ipNet.IP) - 1] += 1
 		args = append(args, "--gateway", ipNet.IP.String())
 	}
 
@@ -133,7 +133,7 @@ func CreateNetwork(network, cidr string) error {
 }
 
 type TestMessage struct {
-	Cidr         string
+	Cidr string
 	KillYourself bool
 }
 
@@ -261,3 +261,4 @@ func ManageNetwork() {
 		HostUpdateTestNetwork(res.Cidr)
 	}
 }
+

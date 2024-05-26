@@ -1,24 +1,23 @@
 package main
 
+import . "github.com/magicvegetable/architecture-lab-4/integration"
 import (
+	"testing"
 	"fmt"
 	"math/rand"
-	"slices"
-	"testing"
 	"time"
-
-	. "github.com/magicvegetable/architecture-lab-4/integration"
+	"slices"
 	"github.com/stretchr/testify/assert"
 )
 
 const (
-	maxIPPartValue                      = uint64(255)
-	maxPort                             = uint64(65535)
-	GetAvailableServerTestsAmount       = 100
+	maxIPPartValue = uint64(255)
+	maxPort = uint64(65535)
+	GetAvailableServerTestsAmount = 100
 	GetAvailableServerTestsChecksAmount = 100
 
-	maxRandStrSize        = uint64(100)
-	HashTestsAmount       = 100
+	maxRandStrSize = uint64(100)
+	HashTestsAmount = 100
 	HashTestsChecksAmount = 100
 )
 
@@ -53,7 +52,7 @@ func TestGetAvailableServer(t *testing.T) {
 
 		assert.Nil(t, err, "no error for valid IPNet")
 
-		addr := ip.String() + fmt.Sprintf("%v", rand.Uint64()%(maxPort+1))
+		addr := ip.String() + fmt.Sprintf("%v", rand.Uint64() % (maxPort + 1))
 
 		s1 := GetAvailableServer(addr)
 		for i := 0; i < GetAvailableServerTestsChecksAmount; i++ {
@@ -74,7 +73,7 @@ func killServer(server string) {
 	}
 
 	newServersPool := aliveServers[:serverI]
-	newServersPool = append(newServersPool, aliveServers[serverI+1:]...)
+	newServersPool = append(newServersPool, aliveServers[serverI + 1:]...)
 
 	aliveServers = newServersPool
 }
@@ -98,9 +97,9 @@ func TestBalancer(t *testing.T) {
 	CheckServerHealthInterval = 1 * time.Millisecond
 
 	MonitorServers(HealthMock)
-
+	
 	for _, server := range allServers {
-		t.Run("kill "+server, func(t *testing.T) {
+		t.Run("kill " + server, func(t *testing.T) {
 			killServer(server)
 			time.Sleep(TestServersPoolStateInterval)
 
@@ -114,7 +113,7 @@ func TestBalancer(t *testing.T) {
 	}
 
 	for _, server := range allServers {
-		t.Run("resurrect "+server, func(t *testing.T) {
+		t.Run("resurrect " + server, func(t *testing.T) {
 			resurrectServer(server)
 			time.Sleep(TestServersPoolStateInterval)
 
@@ -127,3 +126,4 @@ func TestBalancer(t *testing.T) {
 		})
 	}
 }
+
